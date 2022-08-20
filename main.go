@@ -1,21 +1,79 @@
 package main
 
 import (
-	"fmt"
-	"math/rand"
-	"time"
+	"encoding/json"
+	"math"
+	"net/http"
+	"os"
+	"strings"
 )
 
+type apiConfigData struct {
+	OpenWeatherMapApiKey string `json:"OpenWeatherMapApiKey"`
+}
+
+type weatherData struct {
+	Name string `json:"name"`
+
+	Main struct {
+		Kelvin float64 `json:"temp"`
+	} `json:"main"`
+}
+
+func loadApiConfig(filename string) (apiConfigData, error) {
+	bytes, err := os.ReadFile(filename)
+
+	if err != nil {
+		return apiConfigData{}, err
+	}
+	var c apiConfigData
+	err = json.Unmarshal(bytes, &c)
+	if err != nil {
+		return apiConfigData{}, err
+	}
+	return c, nil
+}
+
+func hello(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("hello,dear user!\n"))
+}
+
+func query(city string) (weatherData, error) {
+	apiConfig, err := loadApiConfig(".apiConfig")
+	if err != nil {
+		return weatherData{}, err
+	}
+	resp, err := http.Get("http://api.openweathermap.org/data/2.5/weather?APPID=" + apiConfig.OpenWeatherMapApiKey + "&q=" + city)
+	if err != nil {
+		return weatherData{}, err
+	}
+	defer resp.Body.Close()
+
+	var d weatherData
+
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return weatherData{}, err
+	}
+	return d, nil
+}
+
 func main() {
+	http.HandleFunc("/hello", hello)
+	http.HandleFunc("/weather/",
+		func(w http.ResponseWriter, r *http.Request) {
+			city := strings.SplitN(r.URL.Path, "/", 3)[2]
+			data, err := query(city)
+			var tempPointer *float64 = &data.Main.Kelvin
+			*tempPointer -= 273.15
+			*tempPointer = math.Round(*tempPointer)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			json.NewEncoder(w).Encode(data)
+		})
 
-	var name string
-	rand.Seed(time.Now().UnixNano())
-	min := 10
-	max := 40
+	http.ListenAndServe(":8080", nil)
 
-	celsium := rand.Intn(max-min+1) + min
-
-	fmt.Print("Enter your city: ")
-	fmt.Scanf("%s", &name)
-	fmt.Printf("Weather in %s is %d degrees", name, celsium)
 }
